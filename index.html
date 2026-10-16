@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="BLOOM">
+<meta name="robots" content="noindex, nofollow">
+<link rel="apple-touch-icon" href="icon.png">
+<title>BLOOM</title>
+<!--
+  🌸 BLOOM v5 スマホ版の入口（公開のページ。BLOOM の中身はここには入っていない）
+
+  - 本体（bloom5.html）は GitHub の非公開の置き場所 nekosan222/bloom-data の page ブランチにある。
+    Mac の bloom_server.py が /karada のあとに送ってくる
+  - 最初に1回だけ GitHub の鍵（トークン）を入れてもらい、このスマホのブラウザの中にだけ置く
+  - 一度読んだ本体は、このスマホの中（IndexedDB）に控える。次からは控えをすぐ出して、
+    裏で新しい版があるかを見る（update.js）。新しければ「切り替える」が出る
+  - 鍵を入れ直したいときは、アドレスの後ろに ?setup を付けて開く
+-->
+<style>
+  :root { --bg: #FFF7F4; --ink: #3A2533; --sub: #8A6F7E; --accent: #E7798F; --card: #FFFFFF; --line: #F0DDE3; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #241A20; --ink: #F6E9EE; --sub: #C9AEBB; --accent: #F08FA4; --card: #31242B; --line: #4A3640; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+         font-family: "Hiragino Maru Gothic ProN", "Hiragino Sans", system-ui, sans-serif; display: grid; place-items: center; padding: 24px 16px; }
+  .box { width: 100%; max-width: 420px; text-align: center; }
+  .logo { font-size: 30px; letter-spacing: .12em; font-weight: 700; color: var(--accent); margin-bottom: 6px; }
+  p { color: var(--sub); line-height: 1.7; font-size: 14px; margin: 8px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; text-align: left; margin-top: 16px; }
+  ol { padding-left: 1.3em; margin: 6px 0 12px; font-size: 13.5px; line-height: 1.8; }
+  input { width: 100%; font-size: 16px; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  button { width: 100%; margin-top: 10px; font-size: 16px; padding: 12px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; font-weight: 700; }
+  .err { color: #C94A5E; font-size: 13px; min-height: 1.4em; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin: 0 3px; animation: b 1s infinite alternate; }
+  .dot:nth-child(2) { animation-delay: .2s; } .dot:nth-child(3) { animation-delay: .4s; }
+  @keyframes b { to { opacity: .2; transform: translateY(-4px); } }
+</style>
+</head>
+<body>
+<div class="box" id="box">
+  <div class="logo">BLOOM</div>
+  <p id="msg">ひらいています <span class="dot"></span><span class="dot"></span><span class="dot"></span></p>
+</div>
+<script>
+(function () {
+  "use strict";
+  var OWNER = "nekosan222", REPO = "bloom-data", PAGE_BRANCH = "page";
+  var API = "https://api.github.com/repos/" + OWNER + "/" + REPO;
+  var V = "d57f5350";   // publish_phone.sh が github.js・shim.js・update.js の中身から作る印に置きかえる
+  function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { return null; } }
+  var TOKEN = ls("bloomPhoneToken");
+  var box = document.getElementById("box"), msg = document.getElementById("msg");
+
+  function headers(accept) { return {"Authorization": "Bearer " + TOKEN, "Accept": accept, "X-GitHub-Api-Version": "2022-11-28"}; }
+
+  // ---- 控え（IndexedDB）
+  function idb() {
+    return new Promise(function (res, rej) {
+      var r = indexedDB.open("bloom-phone", 1);
+      r.onupgradeneeded = function () { r.result.createObjectStore("kv"); };
+      r.onsuccess = function () { res(r.result); }; r.onerror = function () { rej(r.error); };
+    });
+  }
+  function idbGet(k) { return idb().then(function (d) { return new Promise(function (res) { var q = d.transaction("kv").objectStore("kv").get(k); q.onsuccess = function () { res(q.result || null); }; q.onerror = function () { res(null); }; }); }).catch(function () { return null; }); }
+  function idbPut(k, v) { return idb().then(function (d) { return new Promise(function (res) { var t = d.transaction("kv", "readwrite"); t.objectStore("kv").put(v, k); t.oncomplete = function () { res(true); }; t.onerror = function () { res(false); }; }); }).catch(function () { return false; }); }
+
+  // ---- GitHub から本体を読む
+  function latestSha() {
+    return fetch(API + "/commits/" + PAGE_BRANCH, {headers: headers("application/vnd.github.sha"), cache: "no-store"})
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); }).then(function (t) { return t.trim(); });
+  }
+  function fetchPage() {
+    return fetch(API + "/contents/bloom5.html?ref=" + PAGE_BRANCH, {headers: headers("application/vnd.github.raw"), cache: "no-store"})
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); });
+  }
+  function download() {
+    return latestSha().then(function (sha) {
+      return fetchPage().then(function (html) {
+        var v = {sha: sha, html: html, at: Date.now()};
+        return idbPut("page", v).then(function () { return v; });
+      });
+    });
+  }
+
+  // ---- 本体を出す（Mac 版と同じく、頭に shim を差し込む。github.js → shim.js の順で、BLOOM の script より先に）
+  function render(html) {
+    html = html.replace(/^\s*<!doctype[^>]*>/i, "");
+    var head = '<!doctype html>\n<meta charset="utf-8">\n' +
+      '<script src="github.js?v=' + V + '"><\/script>\n<script src="shim.js?v=' + V + '"><\/script>\n' +
+      '<script src="update.js?v=' + V + '"><\/script>\n';
+    document.open(); document.write(head + html); document.close();
+  }
+
+  // ---- 鍵を入れる画面
+  function setup(note) {
+    box.innerHTML = '<div class="logo">BLOOM</div><p>スマホ版をはじめる準備（最初の1回だけ）</p>' +
+      '<div class="card"><ol>' +
+      '<li>GitHub の <b>Settings → Developer settings → Fine-grained tokens</b> で「Generate new token」</li>' +
+      '<li><b>Repository access</b> は「Only select repositories」で <b>bloom-data</b> だけ</li>' +
+      '<li><b>Permissions → Contents</b> を「Read and write」</li>' +
+      '<li>できた鍵（github_pat_…）をここに貼る</li></ol>' +
+      '<input id="tk" type="password" autocomplete="off" placeholder="github_pat_…">' +
+      '<div class="err" id="er">' + (note || "") + '</div><button id="go">はじめる</button>' +
+      '<p>鍵はこのスマホの中にだけ置きます。入れ直したいときは、アドレスの後ろに <b>?setup</b> を付けて開いてください。</p></div>';
+    document.getElementById("go").onclick = function () {
+      var t = document.getElementById("tk").value.replace(/[\s​-‍﻿]/g, "");
+      var er = document.getElementById("er");
+      if (!t) { er.textContent = "鍵を貼ってください"; return; }
+      er.textContent = "たしかめています…";
+      fetch(API, {headers: {"Authorization": "Bearer " + t, "Accept": "application/vnd.github+json"}, cache: "no-store"}).then(function (r) {
+        if (r.status === 401) { er.textContent = "この鍵は使えません（貼り間違い・期限切れ）"; return; }
+        if (r.status === 404) { er.textContent = "この鍵では bloom-data が見えません（Repository access を確かめてください）"; return; }
+        if (!r.ok) { er.textContent = "GitHub の返事が " + r.status + " でした"; return; }
+        ls("bloomPhoneToken", t);
+        location.replace(location.pathname);
+      }, function () { er.textContent = "GitHub につながりません（電波を確かめてください）"; });
+    };
+  }
+
+  if (!TOKEN || /[?&]setup\b/.test(location.search)) { setup(); return; }
+
+  idbGet("page").then(function (cached) {
+    if (cached && cached.html) { render(cached.html); return; }      // 控えがあればすぐ出す（新しい版は update.js が見る）
+    msg.innerHTML = 'はじめて読み込んでいます（1.8MBほど）<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+    download().then(function (v) { render(v.html); }, function (e) {
+      if (String(e.message) === "401") { setup("鍵が使えなくなりました。入れ直してください"); return; }
+      msg.textContent = "読み込めませんでした（" + e.message + "）。電波を確かめて、もう一度開いてください";
+    });
+  });
+})();
+</script>
+</body>
+</html>
