@@ -18,6 +18,9 @@
   - 一度読んだ本体は、このスマホの中（IndexedDB）に控える。次からは控えをすぐ出して、
     裏で新しい版があるかを見る（update.js）。新しければ「切り替える」が出る
   - 鍵を入れ直したいときは、アドレスの後ろに ?setup を付けて開く
+  - 2026/10/30〜 この1つの型から、publish_phone.sh が入口を3つ作る（本人「ぜんぶ一緒だとみない」）：
+    index.html＝BLOOM（bloom5.html）・gekijo.html＝きのう劇場・talk.html＝みんなのトーク。
+    bloom5.html（page ブランチのファイル名）と BLOOM（画面の名前）を置きかえる。鍵は3つで同じものを使う
 -->
 <style>
   :root { --bg: #FFF7F4; --ink: #3A2533; --sub: #8A6F7E; --accent: #E7798F; --card: #FFFFFF; --line: #F0DDE3; }
@@ -50,7 +53,9 @@
   "use strict";
   var OWNER = "nekosan222", REPO = "bloom-data", PAGE_BRANCH = "page";
   var API = "https://api.github.com/repos/" + OWNER + "/" + REPO;
-  var V = "d57f5350";   // publish_phone.sh が github.js・shim.js・update.js の中身から作る印に置きかえる
+  var V = "4edbe7eb";
+  var FILE = "bloom5.html", NAME = "BLOOM";
+  var KEY = FILE === "bloom5.html" ? "page" : "page:" + FILE;   // 控えの名前（BLOOM は前からの "page" のまま）   // publish_phone.sh が github.js・shim.js・update.js の中身から作る印に置きかえる
   function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { return null; } }
   var TOKEN = ls("bloomPhoneToken");
   var box = document.getElementById("box"), msg = document.getElementById("msg");
@@ -74,14 +79,14 @@
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); }).then(function (t) { return t.trim(); });
   }
   function fetchPage() {
-    return fetch(API + "/contents/bloom5.html?ref=" + PAGE_BRANCH, {headers: headers("application/vnd.github.raw"), cache: "no-store"})
+    return fetch(API + "/contents/" + FILE + "?ref=" + PAGE_BRANCH, {headers: headers("application/vnd.github.raw"), cache: "no-store"})
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); });
   }
   function download() {
     return latestSha().then(function (sha) {
       return fetchPage().then(function (html) {
         var v = {sha: sha, html: html, at: Date.now()};
-        return idbPut("page", v).then(function () { return v; });
+        return idbPut(KEY, v).then(function () { return v; });
       });
     });
   }
@@ -90,6 +95,7 @@
   function render(html) {
     html = html.replace(/^\s*<!doctype[^>]*>/i, "");
     var head = '<!doctype html>\n<meta charset="utf-8">\n' +
+      '<script>window.BLOOM_PAGE_FILE = ' + JSON.stringify(FILE) + ';<\/script>\n' +
       '<script src="github.js?v=' + V + '"><\/script>\n<script src="shim.js?v=' + V + '"><\/script>\n' +
       '<script src="update.js?v=' + V + '"><\/script>\n';
     document.open(); document.write(head + html); document.close();
@@ -97,7 +103,7 @@
 
   // ---- 鍵を入れる画面
   function setup(note) {
-    box.innerHTML = '<div class="logo">BLOOM</div><p>スマホ版をはじめる準備（最初の1回だけ）</p>' +
+    box.innerHTML = '<div class="logo">' + NAME + '</div><p>スマホ版をはじめる準備（最初の1回だけ）</p>' +
       '<div class="card"><ol>' +
       '<li>GitHub の <b>Settings → Developer settings → Fine-grained tokens</b> で「Generate new token」</li>' +
       '<li><b>Repository access</b> は「Only select repositories」で <b>bloom-data</b> だけ</li>' +
@@ -123,9 +129,9 @@
 
   if (!TOKEN || /[?&]setup\b/.test(location.search)) { setup(); return; }
 
-  idbGet("page").then(function (cached) {
+  idbGet(KEY).then(function (cached) {
     if (cached && cached.html) { render(cached.html); return; }      // 控えがあればすぐ出す（新しい版は update.js が見る）
-    msg.innerHTML = 'はじめて読み込んでいます（1.8MBほど）<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+    msg.innerHTML = 'はじめて読み込んでいます<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
     download().then(function (v) { render(v.html); }, function (e) {
       if (String(e.message) === "401") { setup("鍵が使えなくなりました。入れ直してください"); return; }
       msg.textContent = "読み込めませんでした（" + e.message + "）。電波を確かめて、もう一度開いてください";
